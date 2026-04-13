@@ -1,5 +1,6 @@
+import express from "express";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
@@ -7,8 +8,11 @@ import {
 import axios from "axios";
 
 const SITE_URL = "https://sait.prosaiti.ru";
+const app = express();
+app.use(express.json());
 
-const server = new Server(
+// Создаём MCP сервер
+const mcpServer = new Server(
   {
     name: "website-reader-mcp",
     version: "1.0.0",
@@ -20,7 +24,8 @@ const server = new Server(
   }
 );
 
-server.setRequestHandler(ListToolsRequestSchema, async () => {
+// Регистрируем инструменты
+mcpServer.setRequestHandler(ListToolsRequestSchema, async () => {
   return {
     tools: [
       {
@@ -31,7 +36,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           properties: {
             url: {
               type: "string",
-              description: "URL страницы (например, / или /services или /contacts)",
+              description: "URL страницы (например, / или /services)",
             },
           },
           required: ["url"],
@@ -41,7 +46,8 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
   };
 });
 
-server.setRequestHandler(CallToolRequestSchema, async (request) => {
+// Обработчик вызова инструментов
+mcpServer.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: args } = request.params;
 
   if (name === "read_website") {
@@ -75,10 +81,23 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   throw new Error(`Неизвестный инструмент: ${name}`);
 });
 
-async function main() {
-  const transport = new StdioServerTransport();
-  await server.connect(transport);
-  console.error("MCP сервер website-reader запущен");
-}
+// HTTP эндпоинт для MCP
+app.post("/mcp", async (req, res) => {
+  const transport = new StreamableHTTPServerTransport({
+    sessionIdGenerator: () => crypto.randomUUID(),
+  });
+  
+  res.on("close", () => transport.close());
+  await mcpServer.connect(transport);
+  await transport.handleRequest(req, res, req.body);
+});
 
-main().catch(console.error);
+// Health check
+app.get("/", (req, res) => {
+  res.json({ status: "ok", service: "mcp-website-reader" });
+});
+
+const PORT = process.env.PORT || 8080;
+app.listen(PORT, () => {
+  console.log(`MCP HTTP сервер запущен на порту ${PORT}`);
+});
