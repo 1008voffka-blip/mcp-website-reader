@@ -4,7 +4,9 @@ import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import { z } from "zod";
 
 const app = express();
-app.use(express.json());
+
+// ВАЖНО: НЕ используем express.json() до MCP маршрутов!
+// MCP сам обработает тело запроса
 
 const server = new McpServer({
   name: "website-reader",
@@ -25,7 +27,7 @@ server.tool(
       const response = await fetch(fullUrl);
       const html = await response.text();
       
-      // Простое извлечение текста (удаляем HTML-теги)
+      // Извлечение текста (удаляем HTML-теги)
       const text = html
         .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
         .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
@@ -39,7 +41,7 @@ server.tool(
       };
     } catch (error) {
       return {
-        content: [{ type: "text", text: `Ошибка: ${error.message}` }]
+        content: [{ type: "text", text: `Ошибка при чтении страницы: ${error.message}` }]
       };
     }
   }
@@ -50,31 +52,44 @@ const transports = {};
 
 // SSE эндпоинт для подключения
 app.get("/sse", async (req, res) => {
+  console.log("Новое SSE подключение");
+  
+  // Устанавливаем правильные заголовки для SSE
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    'Connection': 'keep-alive',
+  });
+  
   const transport = new SSEServerTransport("/messages", res);
   transports[transport.sessionId] = transport;
   
   res.on("close", () => {
+    console.log(`SSE подключение ${transport.sessionId} закрыто`);
     delete transports[transport.sessionId];
   });
   
   await server.connect(transport);
 });
 
-// Эндпоинт для отправки сообщений
+// Эндпоинт для отправки сообщений (НЕ используем middleware до этого!)
 app.post("/messages", async (req, res) => {
   const sessionId = req.query.sessionId;
   const transport = transports[sessionId];
   
   if (transport) {
+    // Безопасная обработка POST запроса
     await transport.handlePostMessage(req, res);
   } else {
-    res.status(404).send("Session not found");
+    res.status(404).send("Сессия не найдена");
   }
 });
 
-// Health check
+// Health check (после MCP маршрутов можно использовать middleware)
+app.use(express.json());
+
 app.get("/", (req, res) => {
-  res.json({ status: "ok", service: "mcp-website-reader" });
+  res.json({ status: "ok", service: "mcp-website-reader", connections: Object.keys(transports).length });
 });
 
 const PORT = process.env.PORT || 8080;
