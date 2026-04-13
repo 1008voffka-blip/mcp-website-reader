@@ -1,66 +1,32 @@
 import express from "express";
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import {
-  CallToolRequestSchema,
-  ListToolsRequestSchema,
-} from "@modelcontextprotocol/sdk/types.js";
-import axios from "axios";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
+import { z } from "zod";
 
-const SITE_URL = "https://sait.prosaiti.ru";
 const app = express();
 app.use(express.json());
 
-// Создаём MCP сервер
-const mcpServer = new Server(
-  {
-    name: "website-reader-mcp",
-    version: "1.0.0",
-  },
-  {
-    capabilities: {
-      tools: {},
-    },
-  }
-);
-
-// Регистрируем инструменты
-mcpServer.setRequestHandler(ListToolsRequestSchema, async () => {
-  return {
-    tools: [
-      {
-        name: "read_website",
-        description: "Прочитать содержимое страницы сайта sait.prosaiti.ru",
-        inputSchema: {
-          type: "object",
-          properties: {
-            url: {
-              type: "string",
-              description: "URL страницы (например, / или /services)",
-            },
-          },
-          required: ["url"],
-        },
-      },
-    ],
-  };
+const server = new McpServer({
+  name: "website-reader",
+  version: "1.0.0",
 });
 
-// Обработчик вызова инструментов
-mcpServer.setRequestHandler(CallToolRequestSchema, async (request) => {
-  const { name, arguments: args } = request.params;
-
-  if (name === "read_website") {
-    const urlPath = args?.url || "/";
-    const fullUrl = urlPath.startsWith("http") ? urlPath : `${SITE_URL}${urlPath}`;
+// Инструмент для чтения сайта
+server.tool(
+  "read_website",
+  "Прочитать содержимое страницы сайта sait.prosaiti.ru",
+  {
+    url: z.string().describe("URL страницы, например / или /services"),
+  },
+  async ({ url }) => {
+    const fullUrl = url.startsWith("http") ? url : `https://sait.prosaiti.ru${url}`;
     
     try {
-      const response = await axios.get(fullUrl, {
-        headers: { "User-Agent": "MCP-Bot/1.0" },
-        timeout: 10000,
-      });
+      const response = await fetch(fullUrl);
+      const html = await response.text();
       
-      const text = response.data
+      // Простое извлечение текста (удаляем HTML-теги)
+      const text = html
         .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
         .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
         .replace(/<[^>]+>/g, " ")
@@ -69,27 +35,41 @@ mcpServer.setRequestHandler(CallToolRequestSchema, async (request) => {
         .substring(0, 8000);
       
       return {
-        content: [{ type: "text", text: text || "Страница не содержит текста" }],
+        content: [{ type: "text", text: text || "Страница не содержит текста" }]
       };
     } catch (error) {
       return {
-        content: [{ type: "text", text: `Не удалось прочитать страницу: ${error.message}` }],
+        content: [{ type: "text", text: `Ошибка: ${error.message}` }]
       };
     }
   }
+);
 
-  throw new Error(`Неизвестный инструмент: ${name}`);
-});
+// Хранилище активных SSE транспортов
+const transports = {};
 
-// HTTP эндпоинт для MCP
-app.post("/mcp", async (req, res) => {
-  const transport = new StreamableHTTPServerTransport({
-    sessionIdGenerator: () => crypto.randomUUID(),
+// SSE эндпоинт для подключения
+app.get("/sse", async (req, res) => {
+  const transport = new SSEServerTransport("/messages", res);
+  transports[transport.sessionId] = transport;
+  
+  res.on("close", () => {
+    delete transports[transport.sessionId];
   });
   
-  res.on("close", () => transport.close());
-  await mcpServer.connect(transport);
-  await transport.handleRequest(req, res, req.body);
+  await server.connect(transport);
+});
+
+// Эндпоинт для отправки сообщений
+app.post("/messages", async (req, res) => {
+  const sessionId = req.query.sessionId;
+  const transport = transports[sessionId];
+  
+  if (transport) {
+    await transport.handlePostMessage(req, res);
+  } else {
+    res.status(404).send("Session not found");
+  }
 });
 
 // Health check
@@ -99,5 +79,7 @@ app.get("/", (req, res) => {
 
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => {
-  console.log(`MCP HTTP сервер запущен на порту ${PORT}`);
+  console.log(`MCP SSE сервер запущен на порту ${PORT}`);
+  console.log(`SSE endpoint: /sse`);
+  console.log(`Messages endpoint: /messages`);
 });
