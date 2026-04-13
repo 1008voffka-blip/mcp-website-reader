@@ -3,10 +3,8 @@ import express from "express";
 const app = express();
 const PORT = process.env.PORT || 8080;
 
-// Хранилище сессий
 const sessions = new Map();
 
-// SSE endpoint для подключения
 app.get("/sse", (req, res) => {
   const sessionId = Math.random().toString(36).substring(7);
   
@@ -19,17 +17,16 @@ app.get("/sse", (req, res) => {
     "Access-Control-Allow-Origin": "*",
   });
   
-  // Отправляем endpoint для POST запросов
   res.write(`event: endpoint\ndata: /messages?sessionId=${sessionId}\n\n`);
   
   sessions.set(sessionId, res);
   
   const keepAlive = setInterval(() => {
-    if (res.writableEnded) {
+    if (!res.writableEnded) {
+      res.write(": keepalive\n\n");
+    } else {
       clearInterval(keepAlive);
-      return;
     }
-    res.write(": keepalive\n\n");
   }, 30000);
   
   req.on("close", () => {
@@ -39,7 +36,6 @@ app.get("/sse", (req, res) => {
   });
 });
 
-// POST endpoint для MCP сообщений
 app.post("/messages", express.json(), async (req, res) => {
   const sessionId = req.query.sessionId;
   const message = req.body;
@@ -51,7 +47,6 @@ app.post("/messages", express.json(), async (req, res) => {
     return res.status(404).json({ error: "Session not found" });
   }
   
-  // Обработка разных MCP методов
   let response;
   
   switch (message.method) {
@@ -60,14 +55,9 @@ app.post("/messages", express.json(), async (req, res) => {
         jsonrpc: "2.0",
         id: message.id,
         result: {
-          protocolVersion: "0.1.0",
-          capabilities: {
-            tools: {}
-          },
-          serverInfo: {
-            name: "website-reader-mcp",
-            version: "1.0.0"
-          }
+          protocolVersion: "2025-03-26",
+          capabilities: { tools: {} },
+          serverInfo: { name: "website-reader-mcp", version: "1.0.0" }
         }
       };
       break;
@@ -84,10 +74,7 @@ app.post("/messages", express.json(), async (req, res) => {
               inputSchema: {
                 type: "object",
                 properties: {
-                  url: {
-                    type: "string",
-                    description: "URL страницы (например, / или /services или /contacts)"
-                  }
+                  url: { type: "string", description: "URL страницы (например, / или /services)" }
                 },
                 required: ["url"]
               }
@@ -119,28 +106,20 @@ app.post("/messages", express.json(), async (req, res) => {
           response = {
             jsonrpc: "2.0",
             id: message.id,
-            result: {
-              content: [{ type: "text", text: text || "Страница не содержит текста" }]
-            }
+            result: { content: [{ type: "text", text: text || "Страница не содержит текста" }] }
           };
         } catch (error) {
           response = {
             jsonrpc: "2.0",
             id: message.id,
-            error: {
-              code: -32000,
-              message: `Ошибка: ${error.message}`
-            }
+            error: { code: -32000, message: `Ошибка: ${error.message}` }
           };
         }
       } else {
         response = {
           jsonrpc: "2.0",
           id: message.id,
-          error: {
-            code: -32601,
-            message: `Method not found: ${name}`
-          }
+          error: { code: -32601, message: `Method not found: ${name}` }
         };
       }
       break;
@@ -149,10 +128,7 @@ app.post("/messages", express.json(), async (req, res) => {
       response = {
         jsonrpc: "2.0",
         id: message.id,
-        error: {
-          code: -32601,
-          message: `Method not found: ${message.method}`
-        }
+        error: { code: -32601, message: `Method not found: ${message.method}` }
       };
   }
   
@@ -160,18 +136,12 @@ app.post("/messages", express.json(), async (req, res) => {
   res.json({ ok: true });
 });
 
-// Health check
 app.get("/", (req, res) => {
-  res.json({ 
-    status: "ok", 
-    service: "mcp-website-reader",
-    sessions: sessions.size,
-    version: "3.0"
-  });
+  res.json({ status: "ok", service: "mcp-website-reader", sessions: sessions.size, version: "3.1" });
 });
 
 app.listen(PORT, () => {
-  console.log(`MCP сервер версии 3.0 запущен на порту ${PORT}`);
+  console.log(`MCP сервер версии 3.1 запущен на порту ${PORT}`);
   console.log(`SSE: /sse`);
   console.log(`POST: /messages`);
 });
