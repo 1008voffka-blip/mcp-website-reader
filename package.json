@@ -8,7 +8,6 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.13.0",
     "express": "^4.18.0",
-    "nodemailer": "^6.9.0",
     "zod": "^3.22.0"
   }
 }
